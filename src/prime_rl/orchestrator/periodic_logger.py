@@ -6,14 +6,19 @@ registered monitor as a time-keyed row (``step=None``)."""
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from typing import TYPE_CHECKING, Callable, ClassVar
 
 from prime_rl import monitors
 from prime_rl.utils.async_utils import safe_cancel
 from prime_rl.utils.logger import get_logger
 
+if TYPE_CHECKING:
+    from prime_rl.control.types import ConfigUpdate
+
 
 class PeriodicLogger:
+    live_fields: ClassVar[tuple[str, ...]] = ("log.interval",)
+
     def __init__(
         self,
         *,
@@ -26,6 +31,10 @@ class PeriodicLogger:
         self.interval = interval
         self.task: asyncio.Task | None = None
         self.stopped = asyncio.Event()
+
+    def reconfigure(self, update: ConfigUpdate) -> None:
+        """The new interval applies from the next tick."""
+        self.interval = update.config.log.interval
 
     async def start(self) -> None:
         self.task = asyncio.create_task(self.run(), name=f"{self.name}_periodic_logger")

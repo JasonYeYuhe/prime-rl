@@ -40,12 +40,12 @@ class TrainSamplingConfig(BaseConfig):
     temperature: float = Field(1.0, ge=0, le=2.0)
     """Sampling temperature."""
 
-    top_p: float = Field(1.0, gt=0, le=1.0)
+    top_p: float = Field(1.0, gt=0, le=1.0, frozen=True)
     """Nucleus (top-p) sampling for train rollouts. Values below 1.0 truncate the sampling
     distribution; the ``rl`` entrypoint auto-enables sampling replay so trainer and
     rollout distributions stay consistent — see docs/inference.md (Sampling Replay)."""
 
-    top_k: int | None = Field(None, ge=1)
+    top_k: int | None = Field(None, ge=1, frozen=True)
     """Top-k sampling for train rollouts. Truncation triggers sampling replay, and
     a default top-k is injected when only top-p truncates so sampling masks stay
     bounded — see docs/inference.md (Sampling Replay)."""
@@ -53,7 +53,7 @@ class TrainSamplingConfig(BaseConfig):
     max_completion_tokens: int | None = None
     """Maximum output tokens per turn. If None, generates until max context length or EOS."""
 
-    logprobs: int | None = Field(None, ge=1)
+    logprobs: int | None = Field(None, ge=1, frozen=True)
     """Record this many top sampler probabilities per token, in addition to its sampled logprob."""
 
     # Strictly speaking, extra_body is not a sampling parameter, but it is the
@@ -90,16 +90,16 @@ class EnvConfig(BaseConfig):
     """One environment a run pulls from: the verifiers blocks it composes (``env`` — what
     runs, ``serve`` — how it's hosted) plus this orchestrator's own per-env knobs."""
 
-    env: SerializeAsAny[vf.EnvConfig] = vf.SingleAgentEnvConfig()
+    env: SerializeAsAny[vf.EnvConfig] = Field(vf.SingleAgentEnvConfig(), frozen=True)
     """The verifiers environment — which env, its seed taskset, each agent, its knobs. Narrowed to the selected env's config class by the env id, else the taskset id."""
 
-    serve: vf.ServeConfig = vf.ServeConfig()
+    serve: vf.ServeConfig = Field(vf.ServeConfig(), frozen=True)
     """How this source's env server is hosted. The sizing knobs are consumed by the launcher, which writes each source's env-server config; an unset ``address`` means the spawned server binds an OS-assigned port and publishes it for the orchestrator. Setting ``address`` marks the server externally managed: the launchers neither write its env-server TOML nor spawn a server for it, and the orchestrator connects to the given address — e.g. a k8s deployment running env servers in their own pods."""
 
-    name: str | None = None
+    name: str | None = Field(None, frozen=True)
     """Display name for this environment in logs, metrics, and buffer keys. Defaults to the taskset id. Must be unique across all envs in the same group."""
 
-    select: vf.SelectConfig = vf.SelectConfig()
+    select: vf.SelectConfig = Field(vf.SelectConfig(), frozen=True)
     """Which of the taskset's tasks this source uses: ``include``/``exclude`` by ``idx``, ``ids``, ``keys`` or ``names``, then ``shuffle``, ``skip`` and ``limit``, applied in that order."""
 
     @model_validator(mode="before")
@@ -181,7 +181,7 @@ class DifficultyPoolSamplerConfig(BaseConfig):
     pools: dict[str, DifficultyPoolConfig] = Field(default_factory=default_difficulty_pools)
     """Named pools ordered by their reward thresholds."""
 
-    seed: int = 42
+    seed: int = Field(42, frozen=True)
 
     @model_validator(mode="after")
     def validate_pools(self):
@@ -474,7 +474,7 @@ class OrchestratorControlConfig(ControlConfig):
 
 
 class OrchestratorConfig(BaseConfig):
-    model: ModelConfig = ModelConfig()
+    model: ModelConfig = Field(ModelConfig(), frozen=True)
     """The model being trained: its model fields plus the client of the live
     vLLM deployment (``[orchestrator.model] name = ...`` with
     ``[orchestrator.model.client]``). Algorithm components reference it as
@@ -482,9 +482,9 @@ class OrchestratorConfig(BaseConfig):
 
     train: TrainConfig = TrainConfig()
 
-    tokenizer: TokenizerConfig = TokenizerConfig()
+    tokenizer: TokenizerConfig = Field(TokenizerConfig(), frozen=True)
 
-    renderer: RendererConfig = AutoRendererConfig()
+    renderer: RendererConfig = Field(AutoRendererConfig(), frozen=True)
     """Typed renderer config (``renderers.RendererConfig`` discriminated union), required —
     training is renderer-only. Defaults to ``"auto"``, which resolves from
     ``tokenizer.name_or_path`` via ``MODEL_RENDERER_MAP``. RL/OPD roll out through the renderer
@@ -495,10 +495,10 @@ class OrchestratorConfig(BaseConfig):
 
     log: LogConfig = LogConfig()
 
-    env_vars: EnvVars = {}
+    env_vars: EnvVars = Field({}, frozen=True)
     """Extra environment variables for the orchestrator process(es). Merged on top of the launcher defaults."""
 
-    monitors: TrainMonitorsConfig = TrainMonitorsConfig()
+    monitors: TrainMonitorsConfig = Field(TrainMonitorsConfig(), frozen=True)
     """Metric monitors (``monitors.wandb``, ``monitors.file``, ``monitors.prime``)."""
 
     collect_inference_metrics: bool = True
@@ -507,19 +507,19 @@ class OrchestratorConfig(BaseConfig):
     inference_metrics_roles: list[Literal["prefill", "decode"]] | None = None
     """P/D role of each policy admin client: labels inference metrics, and prefill engines pause before decode engines on weight updates."""
 
-    ckpt: CheckpointConfig | None = None
+    ckpt: CheckpointConfig | None = Field(None, frozen=True)
     """Checkpoint configuration."""
 
-    resume: ResumeConfig | None = None
+    resume: ResumeConfig | None = Field(None, frozen=True)
     """Resume the orchestrator from a checkpoint. None starts from scratch; an empty block resumes from the latest checkpoint, ``resume.step`` from that step, ``resume.dir`` from an external checkpoint step directory. Without ``ckpt`` the run loads but saves no new checkpoints."""
 
-    weight_broadcast: WeightBroadcastConfig = FileSystemWeightBroadcastConfig()
+    weight_broadcast: WeightBroadcastConfig = Field(FileSystemWeightBroadcastConfig(), frozen=True)
     """Transport used to receive updated weights from the trainer."""
 
-    rollout_transport: TransportConfig = ZMQTransportConfig()
+    rollout_transport: TransportConfig = Field(ZMQTransportConfig(), frozen=True)
     """Transport used to ship rollouts from orchestrator to trainer."""
 
-    output_dir: Path = Field(default_factory=default_output_dir)
+    output_dir: Path = Field(default_factory=default_output_dir, frozen=True)
     """Directory to write outputs to — checkpoints, weights, rollouts, and logs are written as subdirectories. Shared with the trainer; should be a persistent directory with enough disk space and unique per experiment running on a single node. Defaults to ``$PRL_OUTPUT_DIR`` if set, else ``outputs``."""
 
     dispatch_per_minute: int | None = Field(None, ge=1)
@@ -528,7 +528,7 @@ class OrchestratorConfig(BaseConfig):
     batch_size: int = Field(128, ge=1)
     """Samples to train on per step."""
 
-    constant_trainer_batch_size: bool = True
+    constant_trainer_batch_size: bool = Field(True, frozen=True)
     """Require each batch to reach its effective sample target."""
 
     concurrency: ConcurrencyConfig = ConcurrencyConfig()
@@ -537,19 +537,19 @@ class OrchestratorConfig(BaseConfig):
     gc: GCConfig | None = GCConfig()
     """Garbage collection config. Freezes the startup heap, turns off automatic full collections (each one holds the GIL and stalls the event loop for as long as it takes to walk every held episode) and runs one every N steps instead. Young collections still run. Set to null to use Python's default GC behavior."""
 
-    seq_len: int = 2048
+    seq_len: int = Field(2048, frozen=True)
     """Training sequence length. Shorter samples are padded; longer samples are truncated."""
 
-    num_train_workers: int = Field(1, ge=1)
+    num_train_workers: int = Field(1, ge=1, frozen=True)
     """Trainer data-parallel world size (trainer world size // cp). The orchestrator packs one micro-batch list per DP rank, so this must match the trainer topology. Auto-filled by the ``rl`` entrypoint; set explicitly for standalone orchestrator runs."""
 
-    pad_to_multiple_of: int = Field(1, ge=1)
+    pad_to_multiple_of: int = Field(1, ge=1, frozen=True)
     """Pad each packed micro batch to a multiple of this value (the trainer's cp degree). Auto-filled by the ``rl`` entrypoint; set explicitly for standalone orchestrator runs with cp > 1."""
 
-    pad_to_seq_len: bool = False
+    pad_to_seq_len: bool = Field(False, frozen=True)
     """Pad every packed micro batch to ``seq_len`` instead of to a multiple of ``pad_to_multiple_of``. Rows then have one static shape, which avoids recompilation on dynamic sequence lengths (torch.compile, DeepGEMM JIT kernels, ...) at the cost of extra padding."""
 
-    max_steps: int | None = None
+    max_steps: int | None = Field(None, frozen=True)
     """Maximum training steps. If None, runs indefinitely."""
 
     max_staleness: int = Field(8, ge=0)
@@ -558,9 +558,9 @@ class OrchestratorConfig(BaseConfig):
     heartbeat: HeartbeatConfig | None = None
     """BetterStack heartbeat configuration for monitoring training progress."""
 
-    control: OrchestratorControlConfig | None = None
-    """Serve the orchestrator's control API (pause at a step the trainer accepted). If None, it
-    takes no control requests."""
+    control: OrchestratorControlConfig | None = Field(None, frozen=True)
+    """Serve the orchestrator's control API (pause at a step the trainer accepted, update the
+    config live). If None, it takes no control requests."""
 
     @model_validator(mode="after")
     def auto_setup_tokenizer(self):
@@ -607,10 +607,11 @@ class OrchestratorConfig(BaseConfig):
         Owned here: every truncating config gets a top-k bound (bounds the sampling
         masks); opd/opsd is rejected (full-vocab prefill refs would mix
         normalizations). Frozen-source envs sample externally and are exempt."""
-        policy_samplings = [env.sampling for env in self.train.source if env.algo.sampling.source == "policy"] or (
-            [self.train.sampling] if not self.train.source else []
+        # Configs that own a policy sampling config: policy sources, else the group without sources.
+        owners = [env for env in self.train.source if env.algo.sampling.source == "policy"] or (
+            [self.train] if not self.train.source else []
         )
-        truncating = [sampling for sampling in policy_samplings if sampling.truncates_distribution()]
+        truncating = [owner.sampling for owner in owners if owner.sampling.truncates_distribution()]
         if not truncating:
             return self
 
@@ -636,8 +637,9 @@ class OrchestratorConfig(BaseConfig):
                 "bounded and sampling replay stays exact. Set top_k explicitly to override.",
                 stacklevel=2,
             )
-            for sampling in unbounded:
-                sampling.top_k = TRAIN_TOP_K_DEFAULT
+            for owner in owners:
+                if owner.sampling.truncates_distribution() and owner.sampling.top_k is None:
+                    owner.sampling = owner.sampling.model_copy(update={"top_k": TRAIN_TOP_K_DEFAULT})
 
         algos = [env.algo for env in self.train.source] or [self.train.algo]
         if any(algo.type in ("opd", "opsd") for algo in algos):

@@ -324,7 +324,8 @@ class RLConfig(BaseConfig):
                     f"({run_dir}). Under the rl entrypoint, sub-config output directories are derived from "
                     "output_dir / run.name — set those instead."
                 )
-            sub.output_dir = run_dir
+        self.trainer.output_dir = run_dir
+        self.orchestrator = self.orchestrator.model_copy(update={"output_dir": run_dir})
         return self
 
     @model_validator(mode="after")
@@ -443,7 +444,9 @@ class RLConfig(BaseConfig):
                 "have no disk artifact to load from."
             )
         self.trainer.weight_broadcast = self.weight_broadcast.model_copy()
-        self.orchestrator.weight_broadcast = self.weight_broadcast.model_copy()
+        self.orchestrator = self.orchestrator.model_copy(
+            update={"weight_broadcast": self.weight_broadcast.model_copy()}
+        )
         if self.inference is not None:
             self.inference.weight_broadcast = InferenceWeightBroadcastConfig(type=self.weight_broadcast.type)
         return self
@@ -538,13 +541,14 @@ class RLConfig(BaseConfig):
         loss = self.trainer.loss
         if loss.type != "icepop" or not loss.score_centering:
             return self
-        samplings = [
-            env.sampling for env in self.orchestrator.train.source if env.algo.sampling.source == "policy"
-        ] or ([self.orchestrator.train.sampling] if not self.orchestrator.train.source else [])
-        if not samplings:
+        owners = [env for env in self.orchestrator.train.source if env.algo.sampling.source == "policy"] or (
+            [self.orchestrator.train] if not self.orchestrator.train.source else []
+        )
+        if not owners:
             raise ValueError("Score centering requires a policy-sampled training source")
         requested = []
-        for sampling in samplings:
+        for owner in owners:
+            sampling = owner.sampling
             if sampling.temperature <= 0:
                 raise ValueError("Score centering requires stochastic sampling (temperature > 0)")
             k = sampling.top_k if sampling.truncates_distribution() else loss.score_centering_topk
@@ -552,8 +556,8 @@ class RLConfig(BaseConfig):
                 raise ValueError("Truncated score centering requires a bounded top_k")
             if sampling.logprobs is not None and sampling.logprobs < k:
                 raise ValueError(f"Score centering needs sampling.logprobs >= {k}")
-            sampling.logprobs = max(sampling.logprobs or 0, k)
-            requested.append(sampling.logprobs + 2)
+            owner.sampling = sampling.model_copy(update={"logprobs": max(sampling.logprobs or 0, k)})
+            requested.append(owner.sampling.logprobs + 2)
         if self.inference is not None:
             if getattr(self.inference.vllm, "logprobs_mode", "processed_logprobs") != "processed_logprobs":
                 raise ValueError("Score centering requires inference.vllm.logprobs_mode = 'processed_logprobs'")
@@ -606,17 +610,16 @@ class RLConfig(BaseConfig):
 
     @model_validator(mode="after")
     def auto_setup_deployment(self):
-        self.orchestrator.pad_to_multiple_of = self.trainer.model.cp
+        pad_to_multiple_of = self.trainer.model.cp
         if isinstance(self.trainer.model.quantization, MXFP8Config):
             # MXFP8 linears quantize grad_output in 32-token blocks, per CP rank.
-            self.orchestrator.pad_to_multiple_of = math.lcm(
-                self.orchestrator.pad_to_multiple_of, self.trainer.model.cp * 32
-            )
+            pad_to_multiple_of = math.lcm(pad_to_multiple_of, self.trainer.model.cp * 32)
+        num_train_workers = self.orchestrator.num_train_workers
         if self.deployment.type == "single_node":  # single-node
             # set num_train_workers to the number of data replicas
             non_data_parallel_size = self.trainer.model.cp
             if self.deployment.num_train_gpus > 1:
-                self.orchestrator.num_train_workers = self.deployment.num_train_gpus // non_data_parallel_size
+                num_train_workers = self.deployment.num_train_gpus // non_data_parallel_size
 
             # fill up inference capacity with dp ranks
             if self.inference is not None:
@@ -639,9 +642,7 @@ class RLConfig(BaseConfig):
                     self.orchestrator.weight_broadcast.inference_world_size = world_size
 
         elif self.deployment.type == "multi_node":  # multi-node
-            self.orchestrator.num_train_workers = (
-                self.deployment.num_train_nodes * self.deployment.gpus_per_node // self.trainer.model.cp
-            )
+            num_train_workers = self.deployment.num_train_nodes * self.deployment.gpus_per_node // self.trainer.model.cp
 
             if self.deployment.nodes_per_fsdp_group is not None:
                 if self.deployment.num_train_nodes % self.deployment.nodes_per_fsdp_group != 0:
@@ -721,6 +722,9 @@ class RLConfig(BaseConfig):
                 assert self.orchestrator.weight_broadcast.type in ("nccl", "nixl")
                 self.orchestrator.weight_broadcast.inference_world_size = total_infer_workers
 
+        self.orchestrator = self.orchestrator.model_copy(
+            update={"pad_to_multiple_of": pad_to_multiple_of, "num_train_workers": num_train_workers}
+        )
         return self
 
     @model_validator(mode="after")

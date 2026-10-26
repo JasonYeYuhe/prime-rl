@@ -30,12 +30,13 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 import verifiers.v1 as vf
 from aiolimiter import AsyncLimiter
 
 from prime_rl import monitors
+from prime_rl.control.types import ConfigUpdate
 from prime_rl.orchestrator import live
 from prime_rl.orchestrator.clients import InferenceClient
 from prime_rl.orchestrator.envs import EvalEnvs, TrainEnvs
@@ -109,6 +110,10 @@ class DispatcherMetrics:
         return out
 
 
+def make_rate_limiter(dispatch_per_minute: float | None) -> AsyncLimiter | None:
+    return AsyncLimiter(dispatch_per_minute, time_period=60) if dispatch_per_minute else None
+
+
 def _validate_episode_task(episode: vf.WireEpisode, task: vf.Task) -> None:
     expected = (task.key, task.hash)
     actual = (episode.task.key, episode.task.hash)
@@ -122,6 +127,8 @@ class Dispatcher:
     under shared capacity, and emits native verifier episodes to ``out_q``.
     The watcher drives ``on_version_pending`` around weight updates; the
     orchestrator triggers eval epochs."""
+
+    live_fields: ClassVar[tuple[str, ...]] = ("dispatch_per_minute",)
 
     def __init__(
         self,
@@ -161,9 +168,7 @@ class Dispatcher:
         # bound ``out_q``
         self.max_inflight = initial_max_inflight
         self.current_inflight = 0
-        self.rate_limiter: AsyncLimiter | None = (
-            AsyncLimiter(dispatch_per_minute, time_period=60) if dispatch_per_minute else None
-        )
+        self.rate_limiter = make_rate_limiter(dispatch_per_minute)
         # Admission smoothing: the pool may only GROW by ``burst_cap`` per
         # window. Replacing a completed episode is always free (each natural
         # completion refunds one admission); only net expansion is metered.
@@ -189,6 +194,7 @@ class Dispatcher:
         # in-flight work). One entry per episode — the sinks count episodes,
         # never loose traces — plus terminal dispatcher events for attempts
         # that produced no episode.
+        # Sized at startup: a live ``concurrency.max_inflight`` change moves the cap, not this bound.
         maxsize = max(8, max_inflight_ceiling) if max_inflight_ceiling is not None else 0
         self.out_q: asyncio.Queue[DispatchResult] = asyncio.Queue(maxsize=maxsize)
 
@@ -235,6 +241,11 @@ class Dispatcher:
         the current in-flight count sheds nothing — admissions just stay
         blocked until enough episodes finish."""
         self.max_inflight = max_inflight
+
+    def reconfigure(self, update: ConfigUpdate) -> None:
+        """An admission already waiting on the old rate limiter finishes on it; the next one
+        uses the new limiter, which starts with a full bucket."""
+        self.rate_limiter = make_rate_limiter(update.config.dispatch_per_minute)
 
     def cancel_inflight(self, n: int) -> None:
         """Cancel roughly ``n`` in-flight train episodes, youngest groups
@@ -519,6 +530,8 @@ class Dispatcher:
         else:
             cache_salt = None
 
+        # A group samples with the settings of the step it was opened at, also across a live update.
+        sampling = env.sampling_at(group.step)
         group.episodes_to_schedule -= 1
         await self.acquire()
         self.admissions_in_window += 1
@@ -550,6 +563,7 @@ class Dispatcher:
                 episode = await env.run(
                     client=client,
                     model_name=model_name,
+                    sampling=sampling,
                     cache_salt=cache_salt,
                     task_data=group.task.data.model_dump(mode="json"),
                     on_delta=on_delta,

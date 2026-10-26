@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import random
 from collections import defaultdict
-from typing import Any
+from typing import Any, ClassVar
 
 import verifiers.v1 as vf
 
+from prime_rl.control.types import ConfigUpdate
 from prime_rl.orchestrator.curriculum import Curriculum
 from prime_rl.orchestrator.envs import TrainEnvs
 from prime_rl.orchestrator.types import TaskRequest
@@ -16,6 +17,8 @@ from prime_rl.orchestrator.utils import episode_env_name
 
 class TrainSource:
     """Mix train envs and host one user-authored curriculum per env."""
+
+    live_fields: ClassVar[tuple[str, ...]] = ("train.source[*].ratio",)
 
     def __init__(self, train_envs: TrainEnvs) -> None:
         self.rng = random.Random(42)
@@ -34,6 +37,10 @@ class TrainSource:
         self.weights = [float(env.config.ratio) for env in self.envs]
         self._admitted: dict[str, int] = defaultdict(int)
         self._rejected: dict[str, int] = defaultdict(int)
+
+    def reconfigure(self, update: ConfigUpdate) -> None:
+        ratios = {source.resolved_name: source.ratio for source in update.config.train.source}
+        self.weights = [float(ratios[name]) for name in self.env_names]
 
     def next_task(self, *, step: int) -> TaskRequest:
         env_name = self.rng.choices(self.env_names, weights=self.weights, k=1)[0]

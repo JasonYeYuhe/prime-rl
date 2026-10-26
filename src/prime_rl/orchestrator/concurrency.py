@@ -33,9 +33,10 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import ClassVar, Literal
 
 from prime_rl.configs.orchestrator import ConcurrencyConfig
+from prime_rl.control.types import ConfigUpdate
 from prime_rl.utils.logger import get_logger
 from prime_rl.utils.utils import format_num
 
@@ -114,6 +115,14 @@ class EngineLoadSample:
 
 
 class ConcurrencyController:
+    # ``initial_inflight`` must not exceed ``max_inflight``, so lowering the ceiling may need a lower
+    # ``initial_inflight`` too. It only seeds the startup cap, so a new value changes nothing.
+    live_fields: ClassVar[tuple[str, ...]] = (
+        "concurrency.min_inflight",
+        "concurrency.max_inflight",
+        "concurrency.initial_inflight",
+    )
+
     def __init__(self, config: ConcurrencyConfig, *, fallback_cost: int) -> None:
         self.config = config
         self.floor = config.min_inflight
@@ -304,6 +313,15 @@ class ConcurrencyController:
         self.target = target
         self.cap = float(target) if target is not None else self.clamp(self.cap)
         self.apply_limit(int(self.cap), reason="manual target" if target is not None else "adaptive")
+
+    def reconfigure(self, update: ConfigUpdate) -> None:
+        """Move the band and clamp the cap into it. A manual target stays pinned, and a lower
+        cap cancels nothing: admission waits for the pool to drain below it."""
+        self.config = update.config.concurrency
+        self.floor = self.config.min_inflight
+        if self.target is None:
+            self.cap = self.clamp(self.cap)
+            self.apply_limit(int(self.cap), reason="config update")
 
     # ── internals ────────────────────────────────────────────────────────────
 

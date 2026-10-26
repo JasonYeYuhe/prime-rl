@@ -10,7 +10,7 @@ import uuid
 from collections import defaultdict, deque
 from collections.abc import Iterable
 from itertools import zip_longest
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import verifiers.v1 as vf
 from verifiers.v1.utils.eval import plan_rollouts
@@ -18,11 +18,14 @@ from verifiers.v1.utils.eval import plan_rollouts
 from prime_rl.orchestrator.types import TaskRequest
 
 if TYPE_CHECKING:
+    from prime_rl.control.types import ConfigUpdate
     from prime_rl.orchestrator.envs import EvalEnvs
 
 
 class EvalSource:
     """Finite-per-epoch source of eval examples."""
+
+    live_fields: ClassVar[tuple[str, ...]] = ("eval.interval", "eval.source[*].interval")
 
     def __init__(
         self,
@@ -49,6 +52,10 @@ class EvalSource:
         # A fresh run evaluates the base policy. Resumed runs apply interval
         # rules to the loaded checkpoint and later policies.
         self.first_trigger = not is_resumed
+
+    def reconfigure(self, update: ConfigUpdate) -> None:
+        """New intervals apply from the next policy update; an epoch already queued runs out."""
+        self.intervals = dict(update.config.eval.intervals)
 
     def trigger(
         self, step: int, *, force: bool = False, completed: Iterable[vf.WireEpisode] = ()

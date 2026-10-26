@@ -254,7 +254,7 @@ class LogConfig(BaseConfig):
     vf_level: str = Field(default_factory=lambda: os.environ.get("PRIME_VF_LOG_LEVEL", "info"))
     """Log level for the verifiers package. Defaults to ``$PRIME_VF_LOG_LEVEL`` if set, else ``info``."""
 
-    json_logging: bool = False
+    json_logging: bool = Field(False, frozen=True)
     """Emit newline-delimited JSON logs for aggregation (Loki, Grafana, etc.)."""
 
     log_data: bool = False
